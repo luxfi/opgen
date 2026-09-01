@@ -114,7 +114,9 @@ a second renderer would be a second way to do what that package does.
 
 ## What the SDKs depend on
 
-Rust: serde and serde_json. C++: nlohmann/json, and C++20.
+Rust: serde and serde_json. C++: nlohmann/json, and C++17 — which is what the
+header actually needs, an init-statement in an `if` and nothing later. Both g++
+and clang++ compile it under `-Wall -Wextra -Werror`.
 
 No HTTP client, no async runtime, no TLS. The SDK knows the contract; the
 program it lands in already has an HTTP client, and a `Transport` is where it

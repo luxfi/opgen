@@ -140,7 +140,7 @@ find_package(nlohmann_json 3 REQUIRED)
 
 add_library(%s INTERFACE)
 target_include_directories(%s INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/include)
-target_compile_features(%s INTERFACE cxx_std_20)
+target_compile_features(%s INTERFACE cxx_std_17)
 target_link_libraries(%s INTERFACE nlohmann_json::nlohmann_json)
 `, s.Name, ns, ns, ns, ns, ns)
 

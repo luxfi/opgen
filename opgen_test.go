@@ -320,9 +320,19 @@ func TestTheCppHeaderCompilesAndCalls(t *testing.T) {
 		t.Fatal(err)
 	}
 	bin := filepath.Join(work, "calls")
-	run(t, work, compiler, "-std=c++20", "-Wall", "-Wextra", "-Werror",
+	// C++17 is what the header actually needs — an init-statement in an if, and
+	// nothing later — so that is what CMakeLists asks for and what is proven
+	// here. Demanding C++20 for a header that does not need it excludes users
+	// for nothing.
+	run(t, work, compiler, "-std=c++17", "-Wall", "-Wextra", "-Werror",
 		"-I", filepath.Join(dir, "cpp", "include"), src, "-o", bin)
 	run(t, work, bin)
+	if clang, err := exec.LookPath("clang++"); err == nil {
+		// One compiler agreeing with itself is not portability.
+		run(t, work, clang, "-std=c++17", "-Wall", "-Wextra", "-Werror",
+			"-I", filepath.Join(dir, "cpp", "include"), src, "-o", bin+"-clang")
+		run(t, work, bin+"-clang")
+	}
 }
 
 // The Go SDK zip renders is compiled too, in a module of its own, because a
