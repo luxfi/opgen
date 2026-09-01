@@ -118,12 +118,9 @@ func Emit(app *zip.App, o Options) (*Result, error) {
 	if o.Dir == "" {
 		return nil, fmt.Errorf("opgen: no destination directory")
 	}
-	name := o.Name
-	if name == "" {
-		name = snake(app.Declaration().Name)
-	}
-	if name == "" {
-		return nil, fmt.Errorf("opgen: the app has no name and none was given")
+	name, err := called(o.Name, app.Declaration().Name)
+	if err != nil {
+		return nil, err
 	}
 	want := chosen(o.Only)
 
@@ -135,20 +132,16 @@ func Emit(app *zip.App, o Options) (*Result, error) {
 	doc = append(doc, '\n')
 
 	r := &Result{Dir: o.Dir}
+	out := sheet{}
 	if want[zip.OpenAPI] {
-		if err := write(r, o.Dir, "openapi.json", doc); err != nil {
-			return nil, err
-		}
+		out["openapi.json"] = doc
 	}
 	if want[MCP] {
-		tools := serves(app, app.MCPTools())
-		b, err := json.MarshalIndent(tools, "", "  ")
+		b, err := json.MarshalIndent(serves(app, app.MCPTools()), "", "  ")
 		if err != nil {
 			return nil, fmt.Errorf("opgen: rendering the tool list: %w", err)
 		}
-		if err := write(r, o.Dir, "mcp.json", append(b, '\n')); err != nil {
-			return nil, err
-		}
+		out["mcp.json"] = append(b, '\n')
 	}
 	if want[Go] {
 		sdk, err := app.SDK(name)
@@ -158,23 +151,22 @@ func Emit(app *zip.App, o Options) (*Result, error) {
 		for _, g := range sdk.Gaps {
 			r.Gaps = append(r.Gaps, Gap{Where: Go, Op: g.Op, Why: g.Cause})
 		}
-		if err := write(r, o.Dir, filepath.Join("go", name, name+".go"), sdk.Source); err != nil {
-			return nil, err
-		}
+		out[filepath.Join("go", name, name+".go")] = sdk.Source
 	}
 
 	// Everything left is derived from the document's bytes, which is the same
 	// input EmitSpec takes. One pipeline, reached two ways.
-	rest, err := EmitSpec(doc, Options{Dir: o.Dir, Name: name, Only: o.Only})
+	rest, err := render(doc, name, want)
 	if err != nil {
 		return nil, err
 	}
-	r.Files = append(r.Files, rest.Files...)
-	r.Ops, r.Types = rest.Ops, rest.Types
-	r.Gaps = append(r.Gaps, rest.Gaps...)
-	sort.Strings(r.Files)
+	for rel, body := range rest.files {
+		out[rel] = body
+	}
+	r.Ops, r.Types = rest.ops, rest.types
+	r.Gaps = append(r.Gaps, rest.gaps...)
 	sortGaps(r.Gaps)
-	return r, nil
+	return r, out.flush(r, o.Dir)
 }
 
 // EmitSpec writes the projections an OpenAPI document is enough to derive: the
@@ -189,24 +181,49 @@ func EmitSpec(doc []byte, o Options) (*Result, error) {
 	if o.Dir == "" {
 		return nil, fmt.Errorf("opgen: no destination directory")
 	}
+	for _, p := range o.Only {
+		if p == Go {
+			return nil, fmt.Errorf("opgen: the Go SDK speaks the ZAP wire, which a document does not describe — generate it from the app with Emit")
+		}
+	}
 	s, err := Read(doc)
 	if err != nil {
 		return nil, err
 	}
-	name := o.Name
-	if name == "" {
-		name = snake(s.Name)
+	name, err := called(o.Name, s.Name)
+	if err != nil {
+		return nil, err
 	}
-	want := chosen(o.Only)
-	r := &Result{Dir: o.Dir, Ops: len(s.Ops), Types: len(s.Types)}
+	out, err := render(doc, name, chosen(o.Only))
+	if err != nil {
+		return nil, err
+	}
+	r := &Result{Dir: o.Dir, Ops: out.ops, Types: out.types, Gaps: out.gaps}
+	return r, out.files.flush(r, o.Dir)
+}
+
+// drawn is what a document alone yields.
+type drawn struct {
+	files      sheet
+	gaps       []Gap
+	ops, types int
+}
+
+// render is the one derivation from a document, used by both doors.
+func render(doc []byte, name string, want map[zip.Projection]bool) (*drawn, error) {
+	s, err := Read(doc)
+	if err != nil {
+		return nil, err
+	}
+	out := &drawn{files: sheet{}, ops: len(s.Ops), types: len(s.Types)}
 	for _, op := range s.Ops {
 		if len(op.Unbound) == 0 {
 			continue
 		}
 		why := "the address carries " + strings.Join(op.Unbound, ", ") + ", which the input type has no field for"
-		r.Gaps = append(r.Gaps, Gap{Where: Rust, Op: op.ID, Why: why}, Gap{Where: Cpp, Op: op.ID, Why: why})
+		out.gaps = append(out.gaps, Gap{Where: Rust, Op: op.ID, Why: why}, Gap{Where: Cpp, Op: op.ID, Why: why})
 	}
-	sortGaps(r.Gaps)
+	sortGaps(out.gaps)
 
 	if want[CLI] {
 		cmds, err := zip.CommandsFromSpec(doc)
@@ -217,26 +234,53 @@ func EmitSpec(doc []byte, o Options) (*Result, error) {
 		if err != nil {
 			return nil, fmt.Errorf("opgen: rendering the command tree: %w", err)
 		}
-		if err := write(r, o.Dir, "cli.json", append(b, '\n')); err != nil {
-			return nil, err
-		}
+		out.files["cli.json"] = append(b, '\n')
 	}
 	if want[Rust] {
 		for path, body := range rust(s, name) {
-			if err := write(r, o.Dir, filepath.Join("rust", path), body); err != nil {
-				return nil, err
-			}
+			out.files[filepath.Join("rust", path)] = body
 		}
 	}
 	if want[Cpp] {
 		for path, body := range cpp(s, name) {
-			if err := write(r, o.Dir, filepath.Join("cpp", path), body); err != nil {
-				return nil, err
-			}
+			out.files[filepath.Join("cpp", path)] = body
 		}
 	}
-	sort.Strings(r.Files)
-	return r, nil
+	return out, nil
+}
+
+// called settles what the generated package, crate and namespace are named.
+//
+// The name reaches three languages, so it has to be an identifier in all of
+// them: lower case, starting with a letter. A service whose own name is not one
+// says so here rather than emitting a crate that will not build.
+func called(given, fallback string) (string, error) {
+	name := given
+	if name == "" {
+		name = snake(fallback)
+	}
+	if !identifier(name) {
+		if given == "" {
+			return "", fmt.Errorf("opgen: %q is not a name a package, a crate and a namespace can share; pass one that is", fallback)
+		}
+		return "", fmt.Errorf("opgen: %q is not a name a package, a crate and a namespace can share", given)
+	}
+	return name, nil
+}
+
+// identifier is the intersection of what Go, Rust and C++ accept.
+func identifier(s string) bool {
+	if s == "" || s[0] < 'a' || s[0] > 'z' {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c == '_' || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func chosen(only []zip.Projection) map[zip.Projection]bool {
@@ -250,23 +294,38 @@ func chosen(only []zip.Projection) map[zip.Projection]bool {
 	return want
 }
 
-// write puts one file down atomically and records it.
-func write(r *Result, dir, rel string, body []byte) error {
-	dest := filepath.Join(dir, rel)
-	if d := filepath.Dir(dest); d != "" {
-		if err := os.MkdirAll(d, 0o755); err != nil {
+// sheet is everything a run will write, held until all of it is rendered.
+//
+// A run that put its files down as it made them would leave a document and a
+// tool list behind when the SDK after them would not render — a half-described
+// service, on disk, that reads as a whole one. Nothing lands until everything
+// is in hand.
+type sheet map[string][]byte
+
+// flush writes the sheet, each file atomically, and records what it wrote.
+func (s sheet) flush(r *Result, dir string) error {
+	names := make([]string, 0, len(s))
+	for rel := range s {
+		names = append(names, rel)
+	}
+	sort.Strings(names)
+	for _, rel := range names {
+		dest := filepath.Join(dir, rel)
+		if d := filepath.Dir(dest); d != "" {
+			if err := os.MkdirAll(d, 0o755); err != nil {
+				return fmt.Errorf("opgen: %s: %w", rel, err)
+			}
+		}
+		tmp := dest + ".tmp"
+		if err := os.WriteFile(tmp, s[rel], 0o644); err != nil {
 			return fmt.Errorf("opgen: %s: %w", rel, err)
 		}
+		if err := os.Rename(tmp, dest); err != nil {
+			_ = os.Remove(tmp)
+			return fmt.Errorf("opgen: %s: %w", rel, err)
+		}
+		r.Files = append(r.Files, rel)
 	}
-	tmp := dest + ".tmp"
-	if err := os.WriteFile(tmp, body, 0o644); err != nil {
-		return fmt.Errorf("opgen: %s: %w", rel, err)
-	}
-	if err := os.Rename(tmp, dest); err != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("opgen: %s: %w", rel, err)
-	}
-	r.Files = append(r.Files, rel)
 	return nil
 }
 

@@ -259,12 +259,12 @@ func TestABrokenAppIsNotDescribed(t *testing.T) {
 func TestTheGoSDKIsNotReachableFromADocument(t *testing.T) {
 	_, dir := emit(t, fixture.App(), opgen.Options{})
 	out := t.TempDir()
-	r, err := opgen.EmitSpec(read(t, filepath.Join(dir, "openapi.json")), opgen.Options{Dir: out, Name: "vault", Only: []zip.Projection{opgen.Go}})
-	if err != nil {
-		t.Fatalf("EmitSpec: %v", err)
+	_, err := opgen.EmitSpec(read(t, filepath.Join(dir, "openapi.json")), opgen.Options{Dir: out, Name: "vault", Only: []zip.Projection{opgen.Go}})
+	if err == nil {
+		t.Fatal("EmitSpec rendered a Go SDK from a document")
 	}
-	if len(r.Files) != 0 {
-		t.Errorf("wrote %v from a document, want nothing", r.Files)
+	if names, _ := os.ReadDir(out); len(names) != 0 {
+		t.Errorf("wrote %d files, want none", len(names))
 	}
 }
 
@@ -605,4 +605,20 @@ func TestAnAddressTheInputCannotFillGetsNoMethod(t *testing.T) {
 	}
 	run(t, work, cxx, "-std=c++20", "-Wall", "-Wextra", "-Werror",
 		"-I", filepath.Join(dir, "cpp", "include"), src, "-o", filepath.Join(work, "store"))
+}
+
+// A run puts nothing down until all of it is rendered. A generator that wrote
+// as it went would leave a document and a tool list behind when the SDK after
+// them would not render — a half-described service, on disk, that reads as a
+// whole one.
+func TestAFailedRunLeavesNothingBehind(t *testing.T) {
+	dir := t.TempDir()
+	// A name no package, crate and namespace can share is refused after the
+	// document is in hand and before anything is written.
+	if _, err := opgen.Emit(fixture.App(), opgen.Options{Dir: dir, Name: "Not An Identifier"}); err == nil {
+		t.Fatal("Emit accepted a name three languages cannot share")
+	}
+	if names, _ := os.ReadDir(dir); len(names) != 0 {
+		t.Errorf("wrote %d files for a refused run, want none", len(names))
+	}
 }
