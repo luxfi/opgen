@@ -49,7 +49,7 @@ it speaks a wire the document does not describe.
 
     openapi.json                 the contract
     mcp.json                     the agent tool list
-    commands.json                     the command tree
+    commands.json                the command tree
     go/<name>/<name>.go          Go client, ZAP wire, rendered by zip
     rust/<name>/                 Rust crate, HTTP/JSON
     cpp/include/<name>/          C++ header, HTTP/JSON
