@@ -309,18 +309,15 @@ func TestTheRustCrateCompilesAndCalls(t *testing.T) {
 // C++: the header compiles under -Wall -Wextra -Werror and the same call
 // produces the same address and body.
 func TestTheCppHeaderCompilesAndCalls(t *testing.T) {
-	cxx := tool(t, "g++")
+	compiler := cxx(t)
 	_, dir := emit(t, fixture.App(), opgen.Options{})
-	if _, err := os.Stat("/usr/include/nlohmann/json.hpp"); err != nil {
-		t.Skip("nlohmann/json is not installed")
-	}
 	work := t.TempDir()
 	src := filepath.Join(work, "calls.cpp")
 	if err := os.WriteFile(src, []byte(cppCheck), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	bin := filepath.Join(work, "calls")
-	run(t, work, cxx, "-std=c++20", "-Wall", "-Wextra", "-Werror",
+	run(t, work, compiler, "-std=c++20", "-Wall", "-Wextra", "-Werror",
 		"-I", filepath.Join(dir, "cpp", "include"), src, "-o", bin)
 	run(t, work, bin)
 }
@@ -357,6 +354,49 @@ func zipVersion(t *testing.T) string {
 	return parts[1]
 }
 
+// cargoBuild builds a generated crate. It prefers the cached registry so the
+// check runs without a network, and falls back to fetching when the cache is
+// cold — a proof that only runs on the machine that wrote it proves nothing.
+func cargoBuild(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cargo := tool(t, "cargo")
+	if _, err := attempt(t, dir, cargo, append(args, "--offline")...); err == nil {
+		return
+	}
+	if out, err := attempt(t, dir, cargo, args...); err != nil {
+		t.Fatalf("cargo %s:\n%s", strings.Join(args, " "), out)
+	}
+}
+
+// cxx returns a C++ compiler that can see nlohmann/json, or skips. Asking the
+// compiler is the only honest test: the header's location is the system's
+// business, not ours.
+func cxx(t *testing.T) string {
+	t.Helper()
+	compiler := tool(t, "g++")
+	dir := t.TempDir()
+	probe := filepath.Join(dir, "probe.cpp")
+	if err := os.WriteFile(probe, []byte("#include <nlohmann/json.hpp>\nint main() { return 0; }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := attempt(t, dir, compiler, "-std=c++20", probe, "-o", filepath.Join(dir, "probe")); err != nil {
+		t.Skip("nlohmann/json is not where this compiler looks")
+	}
+	return compiler
+}
+
+func attempt(t *testing.T, dir, name string, args ...string) ([]byte, error) {
+	t.Helper()
+	cmd := exec.Command(name, args...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "PATH="+os.Getenv("HOME")+"/.cargo/bin:"+os.Getenv("PATH"), "RUSTFLAGS=-D warnings")
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Logf("%s %s\n%s", filepath.Base(name), strings.Join(args, " "), out)
+	}
+	return out, err
+}
+
 func tool(t *testing.T, name string) string {
 	t.Helper()
 	if testing.Short() {
@@ -381,14 +421,9 @@ func fileExists(p string) bool {
 
 func run(t *testing.T, dir, name string, args ...string) {
 	t.Helper()
-	cmd := exec.Command(name, args...)
-	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "PATH="+os.Getenv("HOME")+"/.cargo/bin:"+os.Getenv("PATH"), "RUSTFLAGS=-D warnings")
-	out, err := cmd.CombinedOutput()
-	if err != nil {
+	if out, err := attempt(t, dir, name, args...); err != nil {
 		t.Fatalf("%s %s:\n%s", name, strings.Join(args, " "), out)
 	}
-	t.Logf("%s %s\n%s", filepath.Base(name), strings.Join(args, " "), out)
 }
 
 type sealed struct {
@@ -418,8 +453,7 @@ func TestNothingUnusedIsGenerated(t *testing.T) {
 	}
 
 	// The compiler is the real check.
-	cargo := tool(t, "cargo")
-	run(t, filepath.Join(dir, "rust", "fixed"), cargo, "build", "--offline")
+	cargoBuild(t, filepath.Join(dir, "rust", "fixed"), "build")
 }
 
 // tree reaches itself three ways: directly through a pointer, indirectly
@@ -491,19 +525,15 @@ func TestATypeThatReachesItselfStillCompiles(t *testing.T) {
 	}
 
 	// The compilers are the real check.
-	cargo := tool(t, "cargo")
-	run(t, filepath.Join(dir, "rust", "grove"), cargo, "build", "--offline")
+	cargoBuild(t, filepath.Join(dir, "rust", "grove"), "build")
 
-	cxx := tool(t, "g++")
-	if _, err := os.Stat("/usr/include/nlohmann/json.hpp"); err != nil {
-		t.Skip("nlohmann/json is not installed")
-	}
+	compiler := cxx(t)
 	work := t.TempDir()
 	src := filepath.Join(work, "grove.cpp")
 	if err := os.WriteFile(src, []byte(groveCheck), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	run(t, work, cxx, "-std=c++20", "-Wall", "-Wextra", "-Werror",
+	run(t, work, compiler, "-std=c++20", "-Wall", "-Wextra", "-Werror",
 		"-I", filepath.Join(dir, "cpp", "include"), src, "-o", filepath.Join(work, "grove"))
 	run(t, work, filepath.Join(work, "grove"))
 }
@@ -591,19 +621,15 @@ func TestAnAddressTheInputCannotFillGetsNoMethod(t *testing.T) {
 		t.Error("the document dropped an address the service answers")
 	}
 
-	cargo := tool(t, "cargo")
-	run(t, filepath.Join(dir, "rust", "store"), cargo, "build", "--offline")
+	cargoBuild(t, filepath.Join(dir, "rust", "store"), "build")
 
-	cxx := tool(t, "g++")
-	if _, err := os.Stat("/usr/include/nlohmann/json.hpp"); err != nil {
-		t.Skip("nlohmann/json is not installed")
-	}
+	compiler := cxx(t)
 	work := t.TempDir()
 	src := filepath.Join(work, "store.cpp")
 	if err := os.WriteFile(src, []byte("#include <store/store.hpp>\nint main() { return 0; }\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	run(t, work, cxx, "-std=c++20", "-Wall", "-Wextra", "-Werror",
+	run(t, work, compiler, "-std=c++20", "-Wall", "-Wextra", "-Werror",
 		"-I", filepath.Join(dir, "cpp", "include"), src, "-o", filepath.Join(work, "store"))
 }
 
