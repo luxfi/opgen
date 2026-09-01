@@ -84,6 +84,22 @@ is two pipelines again, which is the thing being removed.
 
 Credit where it is due: it gets the recursive type right, the same way.
 
+## The docs leg
+
+There is no docs emitter here and there should not be one. `openapi.json` IS the
+docs source: `@hanzo/docs-openapi` — our own fumadocs fork, already what
+docs.lux.network is built on — turns an OpenAPI document into MDX pages. Adding
+a second renderer would be a second way to do what that package does.
+
+    zip typed ops (Go)
+      |
+      +- openapi.json -+- @hanzo/docs-openapi -> MDX -> the docs site
+      |                +- cli.json  (zip.CommandsFromSpec)
+      |                +- rust/
+      |                +- cpp/
+      +- mcp.json      the agent tool list
+      +- go/           zip.App.SDK, the ZAP wire
+
 ## What the SDKs depend on
 
 Rust: serde and serde_json. C++: nlohmann/json, and C++20.
