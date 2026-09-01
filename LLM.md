@@ -248,3 +248,35 @@ Two gates. Generate, then refuse a diff:
 
 The second line is what makes "never drifts" true rather than aspirational: a
 merged op that nobody regenerated for fails the build.
+
+## What this found upstream
+
+Building a generator is a way of reading a framework very carefully, and three
+defects in zip fell out of it. All three are fixed upstream and depended on
+here.
+
+**A path parameter was not decoded** (zip v1.36.39). Every client percent-encodes
+a path segment, because a space, a slash or a percent has no other spelling
+between two slashes. The router matched on the raw text and handed that same
+text to the handler, so a value addressed at `/v1/secrets/café` arrived as
+`caf%C3%A9` and no such address could round-trip in any language. Found by the
+end-to-end check here, and by nothing else — an in-memory transport cannot see
+it.
+
+**A refused type was written as an empty struct** (zip v1.36.40), in three
+shapes, all found generating clients for node's ninety-four ops:
+
+- A field whose own type had no wire form became `struct{}` and the op KEPT its
+  method. The call succeeded and the payload was gone — the "compiles and lies"
+  outcome the projection exists to prevent. node's admin, info and platformvm
+  all shipped `[]struct{}` where a value should be.
+- On an embedded field that substitute is not Go, so the package did not parse
+  and `App.SDK` returned an error. Because the Go leg is built before anything
+  is written, one such op cost that whole app its client surface: no document,
+  no tool list, no Rust, no C++. One op of xvm's ten has that shape.
+- The memo remembering a refused type answered "no" and said nothing, so the
+  SECOND op reaching it had no method and no gap. platformvm's `get_tx_rewards`
+  vanished exactly that way, and only counting methods would have shown it.
+
+A refusal now travels up: a field that cannot cross refuses the type holding it,
+which refuses the op, reported once at the field.
