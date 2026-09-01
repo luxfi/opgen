@@ -1,0 +1,48 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # The generator itself. The compile checks build the generated Rust, C++ and
+  # Go for real; they skip themselves when a toolchain is missing, so this job
+  # installs all three and there is nothing left to skip.
+  test:
+    runs-on: lux-build
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.5'
+      - uses: dtolnay/rust-toolchain@stable
+      - name: nlohmann/json
+        run: sudo apt-get update && sudo apt-get install -y nlohmann-json3-dev
+      - name: gofmt
+        run: test -z "$(gofmt -l .)"
+      - name: Vet
+        run: go vet ./...
+      - name: Test
+        run: go test -count=1 -timeout=20m ./...
+      - name: Test (race)
+        run: go test -count=1 -short -race -timeout=20m ./...
+
+  # What every service using this runs: generate, then refuse a diff. A merged
+  # op that nobody regenerated for fails here, which is what makes the surface
+  # one that cannot drift rather than one that is meant not to.
+  #
+  # A service copies this job, pointing -spec at the document its own binary
+  # writes with `<binary> openapi openapi.json`.
+  drift:
+    runs-on: lux-build
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.5'
+      - name: Regenerate the committed surface
+        run: go run ./internal/fixture/cmd -out example
+      - name: Refuse a diff
+        run: git diff --exit-code example

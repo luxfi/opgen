@@ -1,0 +1,163 @@
+[
+  {
+    "Service": "health",
+    "Name": "vault-health",
+    "OperationID": "vault_health",
+    "Summary": "Report whether this replica is serving",
+    "Description": "",
+    "Method": "GET",
+    "Path": "/v1/health",
+    "Args": [],
+    "Flags": null,
+    "Example": null
+  },
+  {
+    "Service": "seal",
+    "Name": "vault-seal",
+    "OperationID": "vault_seal",
+    "Summary": "Seal a secret. The value is never readable again.",
+    "Description": "",
+    "Method": "POST",
+    "Path": "/v1/seal",
+    "Args": [],
+    "Flags": [
+      {
+        "Name": "at",
+        "Field": "at",
+        "Type": "string",
+        "Help": "",
+        "Required": false
+      },
+      {
+        "Name": "blob",
+        "Field": "blob",
+        "Type": "string",
+        "Help": "",
+        "Required": false
+      },
+      {
+        "Name": "bytes",
+        "Field": "bytes",
+        "Type": "integer",
+        "Help": "",
+        "Required": false
+      },
+      {
+        "Name": "counts",
+        "Field": "counts",
+        "Type": "json",
+        "Help": "",
+        "Required": false
+      },
+      {
+        "Name": "free",
+        "Field": "free",
+        "Type": "json",
+        "Help": "",
+        "Required": false
+      },
+      {
+        "Name": "labels",
+        "Field": "labels",
+        "Type": "json",
+        "Help": "",
+        "Required": false
+      },
+      {
+        "Name": "name",
+        "Field": "name",
+        "Type": "string",
+        "Help": "",
+        "Required": false
+      },
+      {
+        "Name": "nested",
+        "Field": "nested",
+        "Type": "json",
+        "Help": "",
+        "Required": false
+      },
+      {
+        "Name": "owner",
+        "Field": "owner",
+        "Type": "json",
+        "Help": "",
+        "Required": false
+      },
+      {
+        "Name": "rotate",
+        "Field": "rotate",
+        "Type": "boolean",
+        "Help": "",
+        "Required": false
+      },
+      {
+        "Name": "tags",
+        "Field": "tags",
+        "Type": "json",
+        "Help": "",
+        "Required": false
+      },
+      {
+        "Name": "weight",
+        "Field": "weight",
+        "Type": "number",
+        "Help": "",
+        "Required": false
+      }
+    ],
+    "Example": null
+  },
+  {
+    "Service": "secrets",
+    "Name": "vault-list",
+    "OperationID": "vault_list",
+    "Summary": "List the secrets this vault holds",
+    "Description": "",
+    "Method": "GET",
+    "Path": "/v1/secrets",
+    "Args": [],
+    "Flags": [
+      {
+        "Name": "org",
+        "Field": "org",
+        "Type": "string",
+        "Help": "",
+        "Required": false
+      },
+      {
+        "Name": "limit",
+        "Field": "limit",
+        "Type": "integer",
+        "Help": "",
+        "Required": false
+      }
+    ],
+    "Example": null
+  },
+  {
+    "Service": "secrets",
+    "Name": "vault-read",
+    "OperationID": "vault_read",
+    "Summary": "Read one secret's record by name",
+    "Description": "",
+    "Method": "GET",
+    "Path": "/v1/secrets/:name",
+    "Args": [
+      {
+        "Name": "name",
+        "Help": ""
+      }
+    ],
+    "Flags": [
+      {
+        "Name": "reveal",
+        "Field": "reveal",
+        "Type": "boolean",
+        "Help": "",
+        "Required": false
+      }
+    ],
+    "Example": null
+  }
+]

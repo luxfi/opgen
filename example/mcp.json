@@ -1,0 +1,123 @@
+[
+  {
+    "annotations": {
+      "readOnlyHint": true
+    },
+    "description": "Report whether this replica is serving",
+    "inputSchema": {
+      "properties": {},
+      "type": "object"
+    },
+    "name": "vault_health"
+  },
+  {
+    "annotations": {
+      "readOnlyHint": true
+    },
+    "description": "List the secrets this vault holds",
+    "inputSchema": {
+      "properties": {
+        "limit": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "org": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "vault_list"
+  },
+  {
+    "annotations": {
+      "readOnlyHint": true
+    },
+    "description": "Read one secret's record by name",
+    "inputSchema": {
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "reveal": {
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "name": "vault_read"
+  },
+  {
+    "annotations": {},
+    "description": "Seal a secret. The value is never readable again.",
+    "inputSchema": {
+      "$defs": {
+        "Party": {
+          "properties": {
+            "kind": {
+              "type": "string"
+            },
+            "org": {
+              "type": "string"
+            }
+          },
+          "type": "object"
+        }
+      },
+      "properties": {
+        "at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "blob": {
+          "contentEncoding": "base64",
+          "type": "string"
+        },
+        "bytes": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "counts": {
+          "items": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        "free": {
+          "type": "object"
+        },
+        "labels": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "name": {
+          "type": "string"
+        },
+        "nested": {
+          "$ref": "#/$defs/Party"
+        },
+        "owner": {
+          "$ref": "#/$defs/Party"
+        },
+        "rotate": {
+          "type": "boolean"
+        },
+        "tags": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "weight": {
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "type": "object"
+    },
+    "name": "vault_seal"
+  }
+]

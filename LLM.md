@@ -194,6 +194,16 @@ generated field is too, and none is `Option`.
 header is compiled under `-Wall -Wextra -Werror` and run. They skip when a
 toolchain is absent, so a green run says what it proved.
 
+## The committed example
+
+`example/` is the fixture service's whole generated surface, checked in. A
+reader can see exactly what this produces without running it, and CI regenerates
+it and refuses a diff, so a change to an emitter shows up as a change to the
+code it emits in the same review. The generated Go SDK is a package of this
+module, so `go build ./...` compiles it.
+
+    go run ./internal/fixture/cmd -out example
+
 ## CI
 
 Two gates. Generate, then refuse a diff:
