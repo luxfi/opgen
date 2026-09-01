@@ -90,6 +90,9 @@ func cpp(s *Surface, name string) map[string][]byte {
 		n := title(t.Name)
 		p("inline void to_json(nlohmann::json& j, const %s& v) {\n", n)
 		p("    j = nlohmann::json::object();\n")
+		if len(t.Fields) == 0 {
+			p("    (void)v;\n")
+		}
 		for _, f := range t.Fields {
 			field := cppField(f.Name)
 			if f.Cyclic {

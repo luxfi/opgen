@@ -2,7 +2,7 @@ module github.com/luxfi/opgen
 
 go 1.26.5
 
-require github.com/zap-proto/zip v1.36.38
+require github.com/zap-proto/zip v1.36.39
 
 require (
 	github.com/andybalholm/brotli v1.2.1 // indirect

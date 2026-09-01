@@ -33,10 +33,7 @@ var rustKeywords = map[string]bool{
 
 // rust renders the crate: path relative to the rust/ directory, and content.
 func rust(s *Surface, name string) map[string][]byte {
-	version := s.Version
-	if version == "" {
-		version = "0.0.0"
-	}
+	version := semver(s.Version)
 	manifest := fmt.Sprintf(`# Code generated from %s's typed ops by opgen. DO NOT EDIT.
 [package]
 name = "%s"
@@ -101,6 +98,37 @@ serde_json = "1"
 		name + "/Cargo.toml": []byte(manifest),
 		name + "/src/lib.rs": []byte(b.String()),
 	}
+}
+
+// semver is the document's version in the one spelling cargo accepts.
+//
+// A Go service spells its version with a leading v — node's platformvm declares
+// version.Current.String(), which is "v1.36.181" — and cargo refuses to parse a
+// manifest carrying one. Anything that is still not three numbers becomes
+// 0.0.0: a crate that will not parse is worse than one whose version says
+// nothing.
+func semver(v string) string {
+	v = strings.TrimPrefix(strings.TrimSpace(v), "v")
+	parts := strings.SplitN(v, ".", 3)
+	if len(parts) != 3 {
+		return "0.0.0"
+	}
+	for i, p := range parts {
+		if i == 2 {
+			// The patch may carry a pre-release or build suffix, which cargo
+			// takes; only the number in front of it has to be a number.
+			p = strings.SplitN(strings.SplitN(p, "-", 2)[0], "+", 2)[0]
+		}
+		if p == "" {
+			return "0.0.0"
+		}
+		for j := 0; j < len(p); j++ {
+			if p[j] < '0' || p[j] > '9' {
+				return "0.0.0"
+			}
+		}
+	}
+	return v
 }
 
 // rustMethod renders one operation.

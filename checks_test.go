@@ -270,3 +270,86 @@ int main() {
     return 0;
 }
 `
+
+// rustLive is the end-to-end check: a real socket, a real zip service, and a
+// transport of about thirty lines that needs no crate at all. It is what tells
+// us the address and the body the client builds are ones the SERVICE accepts —
+// an in-memory transport can only say they are what we expected to build.
+const rustLive = `use std::io::{Read, Write};
+use std::net::TcpStream;
+use vault::*;
+
+// HTTP/1.1 over a socket, written by hand, because the point of the Transport
+// seam is that the program supplies the bytes and this is the smallest program
+// that can.
+struct Http {
+    addr: String,
+}
+
+impl Transport for Http {
+    fn send(&self, method: &str, target: &str, body: Option<&[u8]>) -> Result<Reply, Error> {
+        let mut sock =
+            TcpStream::connect(&self.addr).map_err(|e| Error::Transport(e.to_string()))?;
+        let payload = body.unwrap_or(b"");
+        let mut head = format!(
+            "{method} {target} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nContent-Length: {}\r\n",
+            payload.len()
+        );
+        if body.is_some() {
+            // A body is always JSON here, so the transport says so once.
+            head.push_str("Content-Type: application/json\r\n");
+        }
+        head.push_str("\r\n");
+        sock.write_all(head.as_bytes())
+            .map_err(|e| Error::Transport(e.to_string()))?;
+        sock.write_all(payload)
+            .map_err(|e| Error::Transport(e.to_string()))?;
+
+        let mut raw = Vec::new();
+        sock.read_to_end(&mut raw)
+            .map_err(|e| Error::Transport(e.to_string()))?;
+        let split = raw
+            .windows(4)
+            .position(|w| w == b"\r\n\r\n")
+            .ok_or_else(|| Error::Transport("no header end".into()))?;
+        let head = String::from_utf8_lossy(&raw[..split]).into_owned();
+        let status: u16 = head
+            .split_whitespace()
+            .nth(1)
+            .and_then(|s| s.parse().ok())
+            .ok_or_else(|| Error::Transport(format!("no status in {head:?}")))?;
+        Ok(Reply { status, body: raw[split + 4..].to_vec() })
+    }
+}
+
+fn live() -> Client<Http> {
+    Client::new(Http { addr: std::env::var("VAULT_ADDR").expect("VAULT_ADDR") })
+}
+
+#[test]
+fn health_answers_over_a_socket() {
+    let got = live().vault_health().unwrap();
+    assert!(got.ready);
+    assert_eq!(got.name, "vault");
+}
+
+#[test]
+fn a_path_and_a_query_reach_the_handler() {
+    // The handler echoes the name it was addressed with, so a wrong URL is a
+    // wrong answer rather than a silent pass.
+    let got = live()
+        .vault_read(&VaultRead { name: "a b/c".into(), reveal: true })
+        .unwrap();
+    assert_eq!(got.name, "a b/c");
+}
+
+#[test]
+fn a_body_reaches_the_handler() {
+    let mut input = Seal::default();
+    input.name = "kilo".into();
+    input.at = "2026-09-01T00:00:00Z".into();
+    let got = live().vault_seal(&input).unwrap();
+    assert_eq!(got.ref_, "kilo");
+    assert_eq!(got.at, "2026-09-01T00:00:00Z");
+}
+`

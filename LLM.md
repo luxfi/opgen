@@ -170,6 +170,28 @@ address. The op stays in the document — the service answers there — and the
 Rust and C++ clients report it as a gap rather than emitting a method that names
 a field its own type has not got.
 
+**zip did not decode a path parameter, and a generated client found it.** Every
+client percent-encodes a path segment, because a space, a slash or a percent has
+no other spelling between two slashes. The router matched on the raw text and
+handed that same text to the handler, so a client addressed at
+`/v1/secrets/café` had its value arrive as `caf%C3%A9` and no path parameter
+carrying such a character could round-trip. Fixed upstream in zip v1.36.39; the
+end-to-end check here is what caught it, and an in-memory transport never could
+have.
+
+**A zip service speaks ZAP unless told otherwise.** The address scheme picks the
+wire, and a bare `host:port` is ZAP over tcp. The Rust and C++ clients are HTTP
+clients, so they reach a service listening on `http://`.
+
+**A struct with no fields has a writer that never touches the value**, which C++
+calls an unused parameter and `-Werror` calls an error. Found on node's admin
+service, whose `EmptyReply` answers eight of its eighteen ops.
+
+**A Go service spells its version with a leading v** and cargo will not parse a
+manifest carrying one. node's platformvm declares `version.Current.String()` —
+`v1.36.181` — which produced a crate that would not build. The document keeps
+the service's own spelling; the manifest gets the one cargo accepts.
+
 **Nothing unused is generated.** A crate carrying a percent-encoder no address
 calls does not compile under the dead-code lint. Found by generating the real
 egress client, whose three ops all answer at fixed addresses.
@@ -190,8 +212,12 @@ generated field is too, and none is `Option`.
 ## Testing
 
 `make check`. The compile tests build the generated Rust, C++ and Go for real —
-`cargo test` runs six integration tests against the generated crate, and the C++
-header is compiled under `-Wall -Wextra -Werror` and run. They skip when a
+`cargo test` runs six integration tests against the generated crate, the C++
+header is compiled under `-Wall -Wextra -Werror` and run, and one check starts
+the fixture service on a real socket and calls it from the generated Rust client
+through a hand-written HTTP transport of about thirty lines. That last one is
+the only check that can say the service ACCEPTS what the client builds; the
+others can only say the client builds what we meant. They skip when a
 toolchain is absent, which is right on a laptop and wrong in CI: a job that
 installed cargo and then skipped the checks that use it is a gate that runs
 nothing. So CI installs all three toolchains and fails on any skip.

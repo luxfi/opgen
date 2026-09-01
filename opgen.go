@@ -102,6 +102,10 @@ type Result struct {
 type Gap struct {
 	Where zip.Projection
 	Op    string
+	// Field is where the value that cannot cross sits, "Type.field", when the
+	// projection knows. A gap that says only "no codec" tells a reader that
+	// something is wrong and not what to change.
+	Field string
 	Why   string
 }
 
@@ -149,7 +153,7 @@ func Emit(app *zip.App, o Options) (*Result, error) {
 			return nil, fmt.Errorf("opgen: the Go SDK: %w", err)
 		}
 		for _, g := range sdk.Gaps {
-			r.Gaps = append(r.Gaps, Gap{Where: Go, Op: g.Op, Why: g.Cause})
+			r.Gaps = append(r.Gaps, Gap{Where: Go, Op: g.Op, Field: g.Field, Why: g.Cause})
 		}
 		out[filepath.Join("go", name, name+".go")] = sdk.Source
 	}
@@ -225,7 +229,7 @@ func render(doc []byte, name string, want map[zip.Projection]bool) (*drawn, erro
 		why := "the address carries " + strings.Join(op.Unbound, ", ") + ", which the input type has no field for"
 		for _, p := range []zip.Projection{Cpp, Rust} {
 			if want[p] {
-				out.gaps = append(out.gaps, Gap{Where: p, Op: op.ID, Why: why})
+				out.gaps = append(out.gaps, Gap{Where: p, Op: op.ID, Field: strings.Join(op.Unbound, ","), Why: why})
 			}
 		}
 	}
@@ -340,7 +344,10 @@ func sortGaps(g []Gap) {
 		if g[i].Where != g[j].Where {
 			return g[i].Where < g[j].Where
 		}
-		return g[i].Op < g[j].Op
+		if g[i].Op != g[j].Op {
+			return g[i].Op < g[j].Op
+		}
+		return g[i].Field < g[j].Field
 	})
 }
 

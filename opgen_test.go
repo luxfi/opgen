@@ -4,11 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/luxfi/opgen"
 	"github.com/luxfi/opgen/internal/fixture"
@@ -711,4 +714,111 @@ func names(src string) string {
 		}
 	}
 	return strings.Join(out, "\n")
+}
+
+// Everything else runs the client against a transport that answers from memory,
+// which can only say the request is the one we meant to build. This runs it
+// against the real service over a real socket, which is what says the service
+// accepts it. It is the check that would have caught a missing content type, a
+// path escaped the wrong way, or a body the binder will not read.
+func TestTheRustClientCallsTheRealService(t *testing.T) {
+	_, dir := emit(t, fixture.App(), opgen.Options{})
+	crate := filepath.Join(dir, "rust", "vault")
+	if err := os.MkdirAll(filepath.Join(crate, "tests"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(crate, "tests", "live.rs"), []byte(rustLive), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	addr := serve(t, fixture.App())
+	t.Setenv("VAULT_ADDR", addr)
+	cargoBuild(t, crate, "test", "--test", "live")
+}
+
+// serve starts an app on a port of its own and waits until it answers.
+func serve(t *testing.T, app *zip.App) string {
+	t.Helper()
+	// Ask the kernel for a free port, then hand it to the app. A port chosen
+	// this way can be taken in the gap, which is why the wait below is a wait
+	// for an answer and not a sleep.
+	probe, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := probe.Addr().String()
+	if err := probe.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// The scheme picks the wire. A bare address is ZAP, which is the right
+	// default inside the fleet and not what an HTTP client speaks, so the
+	// generated Rust and C++ clients reach a service listening on http://.
+	go func() { _ = app.Listen("http://" + addr) }()
+	t.Cleanup(func() { _ = app.Shutdown() })
+
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		resp, err := http.Get("http://" + addr + "/v1/health")
+		if err == nil {
+			_ = resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				return addr
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("%s never answered", addr)
+	return ""
+}
+
+type empty struct{}
+
+func nothingBack(_ context.Context, _ *Filter) (*empty, error) { return &empty{}, nil }
+
+// Filter gives the op an input so it is a real op rather than a bodyless one.
+type Filter struct {
+	Org string `json:"org"`
+}
+
+// A struct with no fields has a writer that never touches the value, which a
+// C++ compiler under -Wunused-parameter calls an error. Found on node's admin
+// service, whose EmptyReply is the answer to eight of its eighteen ops.
+func TestAFieldlessTypeCompilesInCpp(t *testing.T) {
+	app := zip.New(zip.Config{AppName: "quiet", DisableStartupMessage: true})
+	zip.Get(app, "/v1/quiet", nothingBack, zip.WithOperationID("quiet_ping"))
+
+	_, dir := emit(t, app, opgen.Options{})
+	header := read(t, filepath.Join(dir, "cpp/include/quiet/quiet.hpp"))
+	if !bytes.Contains(header, []byte("struct Empty {\n};")) {
+		t.Error("the field-less type is not declared as one")
+	}
+
+	compiler := cxx(t)
+	work := t.TempDir()
+	src := filepath.Join(work, "quiet.cpp")
+	if err := os.WriteFile(src, []byte("#include <quiet/quiet.hpp>\nint main() { return 0; }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run(t, work, compiler, "-std=c++20", "-Wall", "-Wextra", "-Werror",
+		"-I", filepath.Join(dir, "cpp", "include"), src, "-o", filepath.Join(work, "quiet"))
+}
+
+// A Go service spells its version with a leading v. cargo refuses to parse a
+// manifest carrying one, so node's platformvm — which declares
+// version.Current.String() — produced a crate that would not build.
+func TestAGoVersionBecomesOneCargoAccepts(t *testing.T) {
+	app := zip.New(zip.Config{AppName: "tagged", OpenAPI: zip.OpenAPIConfig{Version: "v1.36.181"}, DisableStartupMessage: true})
+	zip.Get(app, "/v1/tagged", nothingBack, zip.WithOperationID("tagged_ping"))
+
+	_, dir := emit(t, app, opgen.Options{})
+	manifest := string(read(t, filepath.Join(dir, "rust/tagged/Cargo.toml")))
+	if !strings.Contains(manifest, `version = "1.36.181"`) {
+		t.Errorf("the manifest version is not one cargo parses:\n%s", manifest)
+	}
+	// The document keeps the version the service actually declares.
+	if !bytes.Contains(read(t, filepath.Join(dir, "openapi.json")), []byte(`"version": "v1.36.181"`)) {
+		t.Error("the document lost the service's own version")
+	}
+	cargoBuild(t, filepath.Join(dir, "rust", "tagged"), "build")
 }
