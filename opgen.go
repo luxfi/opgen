@@ -216,12 +216,18 @@ func render(doc []byte, name string, want map[zip.Projection]bool) (*drawn, erro
 		return nil, err
 	}
 	out := &drawn{files: sheet{}, ops: len(s.Ops), types: len(s.Types)}
+	// A gap is reported for a projection this run is making. Naming one for a
+	// leg nobody asked for describes a client that was not generated.
 	for _, op := range s.Ops {
 		if len(op.Unbound) == 0 {
 			continue
 		}
 		why := "the address carries " + strings.Join(op.Unbound, ", ") + ", which the input type has no field for"
-		out.gaps = append(out.gaps, Gap{Where: Rust, Op: op.ID, Why: why}, Gap{Where: Cpp, Op: op.ID, Why: why})
+		for _, p := range []zip.Projection{Cpp, Rust} {
+			if want[p] {
+				out.gaps = append(out.gaps, Gap{Where: p, Op: op.ID, Why: why})
+			}
+		}
 	}
 	sortGaps(out.gaps)
 
