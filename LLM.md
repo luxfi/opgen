@@ -255,20 +255,24 @@ merged op that nobody regenerated for fails the build.
 
 node's nine apps, 94 typed ops, generated and compiled:
 
-    app          ops  types  gaps   cargo -D warnings   g++/clang -Werror
-    platformvm    31     56    25          ok                  ok
-    admin         18     56     3          ok                  ok
-    info          14     21    11          ok                  ok
-    xvm           10     21     8          ok                  ok
-    xsvm           9     20    11          ok                  ok
-    indexer        6     10     7          ok                  ok
-    health         3      4     0          ok                  ok
-    security       2      3     0          ok                  ok
-    proposervm     1      1     0          ok                  ok
+    app          ops  types   go  gaps   cargo -D warnings   g++/clang -Werror
+    platformvm    31     56   31     0          ok                  ok
+    admin         18     56   17     1          ok                  ok
+    info          14     21   14     0          ok                  ok
+    xvm           10     21   10     0          ok                  ok
+    xsvm           9     20    7     2          ok                  ok
+    indexer        6     10    6     0          ok                  ok
+    health         3      4    3     0          ok                  ok
+    security       2      3    2     0          ok                  ok
+    proposervm     1      1    1     0          ok                  ok
 
-The Rust and C++ clients cover every one of the 94 ops. The gaps are the Go
-column alone — they are the ZAP wire refusing an id it has no codec for, which
-is a fact about the service and not about this.
+The Rust and C++ clients cover every one of the 94 ops and the Go SDK reaches
+91. The three it does not are rooted in a value that has no wire form, rather
+than in a type nobody had written a codec for: admin's `get_config` answers a
+`map[string]interface{}`, and xsvm's `get_block` and `get_block_last` answer a
+`tx.Tx`, which embeds the `Unsigned` interface. A map and an interface cross the
+JSON edge and not the ZAP wire, so those three are the wire refusing, which is a
+fact about the service and not about this.
 
 THE INVARIANT, checked over all 94: every op has a Go method XOR a gap. Never
 both, which was the op that compiled and lost its payload. Never neither, which
@@ -277,9 +281,9 @@ failed both ways at once.
 
 ## What this found upstream
 
-Building a generator is a way of reading a framework very carefully, and three
-defects in zip fell out of it. All three are fixed upstream and depended on
-here.
+Building a generator is a way of reading a framework very carefully. Three
+defects in zip fell out of it, and one thing zip could not yet do. All four are
+upstream and depended on here.
 
 **A path parameter was not decoded** (zip v1.36.39). Every client percent-encodes
 a path segment, because a space, a slash or a percent has no other spelling
@@ -313,3 +317,14 @@ exactly the four that carried `[]struct{}`; `get_tx_rewards` is reported instead
 of absent. The document, the tool list, the command tree and both HTTP clients
 are byte-identical across the fix — only the Go leg moved, which is the only
 leg that was wrong.
+
+**The Go SDK had no codec to call through** (zip v1.36.41). A gap was the ZAP
+wire refusing an id whose codec nobody had registered, and a service registers
+codecs for the values it sends rather than for the reply shapes a client names,
+so most of node's ops had none. zip now emits the codec beside the method —
+`MarshalZAP` and `UnmarshalZAP` written against constant offsets — so the
+generated SDK carries its own. Over the same 94 ops the Go leg went from 43
+methods to 91, and the three that remain are the map and the interface above.
+Six of the 72 generated files moved, all six the Go SDK of an app that gained
+methods; the document, the tool list, the command tree and both HTTP clients are
+byte-identical again.
