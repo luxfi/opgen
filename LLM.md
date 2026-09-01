@@ -251,6 +251,30 @@ Two gates. Generate, then refuse a diff:
 The second line is what makes "never drifts" true rather than aspirational: a
 merged op that nobody regenerated for fails the build.
 
+## Proven at the scale it is for
+
+node's nine apps, 94 typed ops, generated and compiled:
+
+    app          ops  types  gaps   cargo -D warnings   g++/clang -Werror
+    platformvm    31     56    25          ok                  ok
+    admin         18     56     3          ok                  ok
+    info          14     21    11          ok                  ok
+    xvm           10     21     8          ok                  ok
+    xsvm           9     20    11          ok                  ok
+    indexer        6     10     7          ok                  ok
+    health         3      4     0          ok                  ok
+    security       2      3     0          ok                  ok
+    proposervm     1      1     0          ok                  ok
+
+The Rust and C++ clients cover every one of the 94 ops. The gaps are the Go
+column alone — they are the ZAP wire refusing an id it has no codec for, which
+is a fact about the service and not about this.
+
+THE INVARIANT, checked over all 94: every op has a Go method XOR a gap. Never
+both, which was the op that compiled and lost its payload. Never neither, which
+was the op that vanished with nothing recorded. Before the upstream fixes it
+failed both ways at once.
+
 ## What this found upstream
 
 Building a generator is a way of reading a framework very carefully, and three
@@ -282,3 +306,10 @@ shapes, all found generating clients for node's ninety-four ops:
 
 A refusal now travels up: a field that cannot cross refuses the type holding it,
 which refuses the op, reported once at the field.
+
+Re-run over node afterwards: xvm went from generating nothing to all eight
+files; platformvm went from 14 Go methods to 10, and the four that left are
+exactly the four that carried `[]struct{}`; `get_tx_rewards` is reported instead
+of absent. The document, the tool list, the command tree and both HTTP clients
+are byte-identical across the fix — only the Go leg moved, which is the only
+leg that was wrong.
