@@ -235,3 +235,38 @@ int main() {
     return 0;
 }
 `
+
+const groveCheck = `#include <grove/grove.hpp>
+
+#include <cassert>
+#include <string>
+
+struct Echo : grove::Transport {
+    std::string sent;
+    grove::Reply send(const std::string&, const std::string&,
+                      const std::string* body) override {
+        sent = body ? *body : std::string();
+        return grove::Reply{200, sent};
+    }
+};
+
+int main() {
+    Echo t;
+    grove::Tree in;
+    in.name = "root";
+    in.parent = std::make_shared<grove::Tree>();
+    in.parent->name = "above";
+    in.children.push_back(grove::Tree{});
+    in.children[0].name = "below";
+    in.grove = std::make_shared<grove::Forest>();
+
+    const grove::Tree got = grove::Client(t).grove_plant(in);
+    assert(got.name == "root");
+    assert(got.parent && got.parent->name == "above");
+    assert(got.children.size() == 1 && got.children[0].name == "below");
+    // The mutual cycle is broken on one side; the other side is by value and
+    // round-trips as an empty tree.
+    assert(got.grove && got.grove->back.name.empty());
+    return 0;
+}
+`

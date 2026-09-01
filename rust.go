@@ -90,6 +90,9 @@ serde_json = "1"
 	p("    /// Returns a client that calls over `transport`.\n")
 	p("    pub fn new(transport: T) -> Self {\n        Client { transport }\n    }\n")
 	for _, o := range s.Ops {
+		if len(o.Unbound) > 0 {
+			continue // no method, rather than one that names a field the type has not got
+		}
 		p("\n%s", rustMethod(s, o))
 	}
 	p("}\n")
@@ -362,6 +365,9 @@ func urlSpelled(k Kind) bool {
 // every op takes a body and answers at a fixed address needs no encoder.
 func addresses(s *Surface) bool {
 	for _, o := range s.Ops {
+		if len(o.Unbound) > 0 {
+			continue // this op gets no method, so its address is never built
+		}
 		if len(o.Segments) > 0 {
 			return true
 		}

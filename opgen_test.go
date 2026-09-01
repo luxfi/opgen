@@ -421,3 +421,188 @@ func TestNothingUnusedIsGenerated(t *testing.T) {
 	cargo := tool(t, "cargo")
 	run(t, filepath.Join(dir, "rust", "fixed"), cargo, "build", "--offline")
 }
+
+// tree reaches itself three ways: directly through a pointer, indirectly
+// through a slice, and around through another type.
+type tree struct {
+	Name     string  `json:"name"`
+	Parent   *tree   `json:"parent"`
+	Children []tree  `json:"children"`
+	Grove    *forest `json:"grove"`
+}
+
+type forest struct {
+	Back *tree `json:"back"`
+}
+
+func plant(_ context.Context, in *tree) (*tree, error) { return in, nil }
+
+// The document cannot say whether a Go field was a pointer — `*T` and `T` are
+// both a $ref — so a type that reaches itself reads as one that contains itself
+// by value, which neither Rust nor C++ can lay out. The fields on a cycle go
+// behind a pointer and only those; a slice is already indirect and does not.
+func TestATypeThatReachesItselfStillCompiles(t *testing.T) {
+	app := zip.New(zip.Config{AppName: "grove", DisableStartupMessage: true})
+	zip.Post(app, "/v1/plant", plant, zip.WithOperationID("grove_plant"))
+
+	_, dir := emit(t, app, opgen.Options{})
+
+	s, err := opgen.Read(read(t, filepath.Join(dir, "openapi.json")))
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	// The invariant is not WHICH edge is broken — a cycle can be broken
+	// anywhere on it, and the walk breaks it at the first back edge it finds.
+	// The invariant is that what is left contains no type by value that
+	// contains itself, because that is what has no size.
+	if loop := byValue(s.Types); loop != "" {
+		t.Errorf("%s still contains itself by value", loop)
+	}
+	cyclic := map[string]bool{}
+	for _, ty := range s.Types {
+		for _, f := range ty.Fields {
+			if f.Cyclic {
+				cyclic[ty.Name+"."+f.Name] = true
+			}
+		}
+	}
+	// A direct self-reference has one edge, so there is nothing to choose.
+	if !cyclic["tree.parent"] {
+		t.Error("tree.parent points at a tree and was not marked")
+	}
+	// A slice holds its elements elsewhere: already indirect, needs no pointer.
+	if cyclic["tree.children"] {
+		t.Error("a slice was given a pointer it does not need")
+	}
+
+	crate := string(read(t, filepath.Join(dir, "rust/grove/src/lib.rs")))
+	if !strings.Contains(crate, "pub parent: Option<Box<Tree>>") {
+		t.Error("the Rust field on the cycle is not behind a pointer")
+	}
+	if !strings.Contains(crate, "pub children: Vec<Tree>") {
+		t.Error("the Rust slice was given a pointer it does not need")
+	}
+	header := string(read(t, filepath.Join(dir, "cpp/include/grove/grove.hpp")))
+	if !strings.Contains(header, "std::shared_ptr<Tree> parent{};") {
+		t.Error("the C++ field on the cycle is not behind a pointer")
+	}
+	if !strings.Contains(header, "std::vector<Tree> children{};") {
+		t.Error("the C++ slice was given a pointer it does not need")
+	}
+
+	// The compilers are the real check.
+	cargo := tool(t, "cargo")
+	run(t, filepath.Join(dir, "rust", "grove"), cargo, "build", "--offline")
+
+	cxx := tool(t, "g++")
+	if _, err := os.Stat("/usr/include/nlohmann/json.hpp"); err != nil {
+		t.Skip("nlohmann/json is not installed")
+	}
+	work := t.TempDir()
+	src := filepath.Join(work, "grove.cpp")
+	if err := os.WriteFile(src, []byte(groveCheck), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run(t, work, cxx, "-std=c++20", "-Wall", "-Wextra", "-Werror",
+		"-I", filepath.Join(dir, "cpp", "include"), src, "-o", filepath.Join(work, "grove"))
+	run(t, work, filepath.Join(work, "grove"))
+}
+
+// byValue names a type that still reaches itself through fields laid out by
+// value, or "" when none does.
+func byValue(types []opgen.Type) string {
+	fields := map[string][]opgen.Field{}
+	for _, t := range types {
+		fields[t.Name] = t.Fields
+	}
+	const (
+		fresh = iota
+		open
+		done
+	)
+	state := map[string]int{}
+	var walk func(name string) bool
+	walk = func(name string) bool {
+		switch state[name] {
+		case open:
+			return true
+		case done:
+			return false
+		}
+		state[name] = open
+		for _, f := range fields[name] {
+			if f.Cyclic || f.Kind.Sort != opgen.Named {
+				continue
+			}
+			if walk(f.Kind.Ref) {
+				return true
+			}
+		}
+		state[name] = done
+		return false
+	}
+	for _, t := range types {
+		if walk(t.Name) {
+			return t.Name
+		}
+	}
+	return ""
+}
+
+type payload struct {
+	Body string `json:"body"`
+}
+
+func upload(_ context.Context, in *payload) (*payload, error) { return in, nil }
+
+// A wildcard segment names no field, so a client holding only the input value
+// cannot spell the address. It gets no method rather than one that names a
+// field its own type has not got — the same rule the ZAP wire follows when it
+// refuses a type, and for the same reason: a client that compiles and lies is
+// worse than one that says the operation is not reachable.
+func TestAnAddressTheInputCannotFillGetsNoMethod(t *testing.T) {
+	app := zip.New(zip.Config{AppName: "store", DisableStartupMessage: true})
+	zip.Post(app, "/v1/files/*", upload, zip.WithOperationID("store_upload"))
+	zip.Post(app, "/v1/plain", upload, zip.WithOperationID("store_plain"))
+
+	r, dir := emit(t, app, opgen.Options{})
+
+	var where []string
+	for _, g := range r.Gaps {
+		if g.Op == "store_upload" {
+			where = append(where, string(g.Where))
+		}
+	}
+	if strings.Join(where, ",") != "cpp,rust" {
+		t.Fatalf("gaps for store_upload = %v, want both HTTP clients", where)
+	}
+	for _, f := range []string{"rust/store/src/lib.rs", "cpp/include/store/store.hpp"} {
+		body := read(t, filepath.Join(dir, f))
+		if bytes.Contains(body, []byte("store_upload")) {
+			t.Errorf("%s has a method for an address it cannot spell", f)
+		}
+		if !bytes.Contains(body, []byte("store_plain")) {
+			t.Errorf("%s lost an op it can reach", f)
+		}
+	}
+	// The address is still in the contract: the service answers there, and a
+	// caller building the URL by hand needs to know it exists.
+	if !bytes.Contains(read(t, filepath.Join(dir, "openapi.json")), []byte("store_upload")) {
+		t.Error("the document dropped an address the service answers")
+	}
+
+	cargo := tool(t, "cargo")
+	run(t, filepath.Join(dir, "rust", "store"), cargo, "build", "--offline")
+
+	cxx := tool(t, "g++")
+	if _, err := os.Stat("/usr/include/nlohmann/json.hpp"); err != nil {
+		t.Skip("nlohmann/json is not installed")
+	}
+	work := t.TempDir()
+	src := filepath.Join(work, "store.cpp")
+	if err := os.WriteFile(src, []byte("#include <store/store.hpp>\nint main() { return 0; }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run(t, work, cxx, "-std=c++20", "-Wall", "-Wextra", "-Werror",
+		"-I", filepath.Join(dir, "cpp", "include"), src, "-o", filepath.Join(work, "store"))
+}

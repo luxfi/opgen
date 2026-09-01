@@ -50,6 +50,14 @@ type Op struct {
 	Segments []string
 	Query    []string
 	Body     bool
+
+	// Unbound are the templated segments the input type has no field for — a
+	// wildcard, or a parameter named after nothing. The service reads them off
+	// the URL and binds them to nothing, so a client holding only the input
+	// value cannot spell the address. An op with any is reachable by hand and
+	// not by a generated method, and gets none rather than one that names a
+	// field its own type does not have.
+	Unbound []string
 }
 
 // Type is one named structure the wire carries.
@@ -177,7 +185,17 @@ func operation(method, route string, op specOp, declared map[string]Type) (Op, e
 		o.Segments = segments
 		// A path parameter is a field of the body type that the URL carries
 		// instead. It stays in the type — the service reads one struct — and
-		// the emitters know not to write it into the JSON twice.
+		// the emitters know not to write it into the JSON twice. A segment the
+		// type has no field for is one the client cannot fill.
+		held := map[string]bool{}
+		for _, f := range declared[o.In].Fields {
+			held[f.Name] = true
+		}
+		for _, seg := range segments {
+			if !held[seg] {
+				o.Unbound = append(o.Unbound, seg)
+			}
+		}
 		return o, nil
 	}
 	if len(op.Parameters) == 0 {

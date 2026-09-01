@@ -199,6 +199,14 @@ func EmitSpec(doc []byte, o Options) (*Result, error) {
 	}
 	want := chosen(o.Only)
 	r := &Result{Dir: o.Dir, Ops: len(s.Ops), Types: len(s.Types)}
+	for _, op := range s.Ops {
+		if len(op.Unbound) == 0 {
+			continue
+		}
+		why := "the address carries " + strings.Join(op.Unbound, ", ") + ", which the input type has no field for"
+		r.Gaps = append(r.Gaps, Gap{Where: Rust, Op: op.ID, Why: why}, Gap{Where: Cpp, Op: op.ID, Why: why})
+	}
+	sortGaps(r.Gaps)
 
 	if want[CLI] {
 		cmds, err := zip.CommandsFromSpec(doc)
@@ -276,6 +284,15 @@ func sortGaps(g []Gap) {
 // published is the app's OpenAPI document with the addresses it serves but does
 // not declare removed, and the schemas only those addresses reached removed
 // with them.
+//
+// The filter keys on the operationId and not on the path. A declaration spells
+// a route the way the ROUTER does and a document spells it the way OpenAPI
+// does, and the two do not invert: zip renders both "*" and "+" as
+// "{wildcard1}", so reading the document's spelling back into a router pattern
+// is a guess. Matching a wildcard route the wrong way dropped it from the
+// contract silently, which is the failure mode a contract exists to prevent.
+// An operationId is one token in both places — the same one the MCP tool, the
+// command and the SDK method are named after.
 func published(app *zip.App) map[string]any {
 	// Re-read the document through JSON so what is filtered here is the same
 	// value that gets written — OpenAPISpec hands back typed Go maps whose
@@ -289,22 +306,20 @@ func published(app *zip.App) map[string]any {
 		return map[string]any{}
 	}
 
-	declared := map[string]bool{}
-	for _, r := range app.Declaration().Routes {
-		declared[r.Method+" "+r.Pattern] = true
-	}
-
+	live := declares(app)
 	paths, _ := doc["paths"].(map[string]any)
 	for route, raw := range paths {
 		item, ok := raw.(map[string]any)
 		if !ok {
 			continue
 		}
-		for method := range item {
+		for method, op := range item {
 			if !verb(strings.ToUpper(method)) {
 				continue
 			}
-			if !declared[strings.ToUpper(method)+" "+colon(route)] {
+			decl, _ := op.(map[string]any)
+			id, _ := decl["operationId"].(string)
+			if !live[id] {
 				delete(item, method)
 			}
 		}
@@ -316,16 +331,22 @@ func published(app *zip.App) map[string]any {
 	return doc
 }
 
-// serves drops the tools whose op is not on a declared address. The live MCP
-// door already does this; the extraction call does not, so a manifest built
-// from it would offer an agent a tool the service will not answer.
-func serves(app *zip.App, tools []map[string]any) []map[string]any {
+// declares is every operation the app publishes, by name.
+func declares(app *zip.App) map[string]bool {
 	live := map[string]bool{}
 	for _, r := range app.Declaration().Routes {
 		if r.Op != "" {
 			live[r.Op] = true
 		}
 	}
+	return live
+}
+
+// serves drops the tools whose op is not on a declared address. The live MCP
+// door already does this; the extraction call does not, so a manifest built
+// from it would offer an agent a tool the service will not answer.
+func serves(app *zip.App, tools []map[string]any) []map[string]any {
+	live := declares(app)
 	out := make([]map[string]any, 0, len(tools))
 	for _, t := range tools {
 		if name, _ := t["name"].(string); live[name] {
@@ -377,19 +398,4 @@ func prune(doc map[string]any) {
 	if len(components) == 0 {
 		delete(doc, "components")
 	}
-}
-
-// colon is the router's spelling of a document path: "{name}" is "​:name" to
-// everything that matches a route, and a declaration is a list of routes.
-func colon(route string) string {
-	if !strings.Contains(route, "{") {
-		return route
-	}
-	parts := strings.Split(route, "/")
-	for i, p := range parts {
-		if strings.HasPrefix(p, "{") && strings.HasSuffix(p, "}") {
-			parts[i] = ":" + p[1:len(p)-1]
-		}
-	}
-	return strings.Join(parts, "/")
 }

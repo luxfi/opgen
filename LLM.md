@@ -99,6 +99,19 @@ cannot say whether the Go field was a pointer — `*T` and `T` are both a `$ref`
 The fields on a cycle are marked and only those go behind `Option<Box<T>>` and
 `std::shared_ptr<T>`.
 
+**A declaration and a document do not spell a path the same way, and the two do
+not invert.** zip renders both `*` and `+` as `{wildcard1}`, so reading a
+document path back into a router pattern is a guess — and guessing wrong dropped
+every wildcard route from the contract silently. The filter keys on the
+operationId instead, which is one token in both places and the same one the tool,
+the command and the SDK method are named after.
+
+**An address the input type cannot fill gets no method.** A wildcard segment
+names no Go field, so a client holding only the input value cannot spell the
+address. The op stays in the document — the service answers there — and the
+Rust and C++ clients report it as a gap rather than emitting a method that names
+a field its own type has not got.
+
 **Nothing unused is generated.** A crate carrying a percent-encoder no address
 calls does not compile under the dead-code lint. Found by generating the real
 egress client, whose three ops all answer at fixed addresses.

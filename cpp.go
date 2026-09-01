@@ -121,6 +121,9 @@ func cpp(s *Surface, name string) map[string][]byte {
 	p("class Client {\n public:\n")
 	p("    explicit Client(Transport& transport) : transport_(transport) {}\n")
 	for _, o := range s.Ops {
+		if len(o.Unbound) > 0 {
+			continue // no method, rather than one that names a field the type has not got
+		}
 		p("\n%s", cppMethod(s, o))
 	}
 	p("\n private:\n    Transport& transport_;\n};\n\n")
