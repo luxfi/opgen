@@ -81,6 +81,8 @@ github.com/zap-proto/zip v1.36.38 h1:8U8SB8hNJsW/Kk3N4ggXldrfzZ1farxXP3jfsGt9uYE
 github.com/zap-proto/zip v1.36.38/go.mod h1:ucOq4P19gtxzUXKJV/s4nisQj7tzjEEJ1HEhB1AormY=
 github.com/zap-proto/zip v1.36.39 h1:VLIN8wKTpwVnkk7HW9KLeVW775F/dLbe/PUKK/4Ut78=
 github.com/zap-proto/zip v1.36.39/go.mod h1:ucOq4P19gtxzUXKJV/s4nisQj7tzjEEJ1HEhB1AormY=
+github.com/zap-proto/zip v1.36.40 h1:KR9pRq7L8AFkyMv5y6o5gV4XN38m0YFOWUJbUKSc9gs=
+github.com/zap-proto/zip v1.36.40/go.mod h1:ucOq4P19gtxzUXKJV/s4nisQj7tzjEEJ1HEhB1AormY=
 golang.org/x/crypto v0.0.0-20190308221718-c2843e01d9a2/go.mod h1:djNgcEr1/C05ACkg1iLfiJU5Ep61QUkGW8qpdssI0+w=
 golang.org/x/crypto v0.0.0-20191011191535-87dc89f01550/go.mod h1:yigFU9vqHzYiE8UmvKecakEJjdnWj3jj499lnFckfCI=
 golang.org/x/crypto v0.52.0 h1:RMs7fP2rXdep0CftQlK8Uf+kibLm7qkCcradZWYz988=
