@@ -24,8 +24,21 @@ jobs:
         run: test -z "$(gofmt -l .)"
       - name: Vet
         run: go vet ./...
+      # The compile checks skip themselves when a toolchain is missing, which
+      # is right on a laptop and wrong here: a job that installed cargo and a
+      # C++ compiler and then skipped the checks that use them is a gate that
+      # runs nothing. A skip fails the build.
       - name: Test
-        run: go test -count=1 -timeout=20m ./...
+        run: |
+          go test -v -count=1 -timeout=20m ./... 2>&1 | tee test.log
+          exit "${PIPESTATUS[0]}"
+      - name: Nothing skipped
+        run: |
+          if grep -q -- "--- SKIP" test.log; then
+            grep -- "--- SKIP" test.log
+            echo "::error::a check skipped itself; the toolchain it needs is missing"
+            exit 1
+          fi
       - name: Test (race)
         run: go test -count=1 -short -race -timeout=20m ./...
 

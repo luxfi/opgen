@@ -192,7 +192,9 @@ generated field is too, and none is `Option`.
 `make check`. The compile tests build the generated Rust, C++ and Go for real —
 `cargo test` runs six integration tests against the generated crate, and the C++
 header is compiled under `-Wall -Wextra -Werror` and run. They skip when a
-toolchain is absent, so a green run says what it proved.
+toolchain is absent, which is right on a laptop and wrong in CI: a job that
+installed cargo and then skipped the checks that use it is a gate that runs
+nothing. So CI installs all three toolchains and fails on any skip.
 
 ## The committed example
 
