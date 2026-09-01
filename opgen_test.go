@@ -41,7 +41,7 @@ func read(t *testing.T, path string) []byte {
 func TestEveryProjectionIsWritten(t *testing.T) {
 	r, dir := emit(t, fixture.App(), opgen.Options{})
 	want := []string{
-		"cli.json",
+		"commands.json",
 		"cpp/CMakeLists.txt",
 		"cpp/include/vault/vault.hpp",
 		"go/vault/vault.go",
@@ -74,7 +74,7 @@ func TestTheDocumentIsTheOnlyIntermediateForm(t *testing.T) {
 	if _, err := opgen.EmitSpec(read(t, filepath.Join(live, "openapi.json")), opgen.Options{Dir: fromDoc, Name: "vault"}); err != nil {
 		t.Fatalf("EmitSpec: %v", err)
 	}
-	for _, f := range []string{"cli.json", "cpp/include/vault/vault.hpp", "cpp/CMakeLists.txt", "rust/vault/src/lib.rs", "rust/vault/Cargo.toml"} {
+	for _, f := range []string{"commands.json", "cpp/include/vault/vault.hpp", "cpp/CMakeLists.txt", "rust/vault/src/lib.rs", "rust/vault/Cargo.toml"} {
 		if !bytes.Equal(read(t, filepath.Join(live, f)), read(t, filepath.Join(fromDoc, f))) {
 			t.Errorf("%s differs between the app and its own document", f)
 		}
@@ -86,7 +86,7 @@ func TestTheDocumentIsTheOnlyIntermediateForm(t *testing.T) {
 func TestTheSameAppWritesTheSameBytes(t *testing.T) {
 	_, one := emit(t, fixture.App(), opgen.Options{})
 	_, two := emit(t, fixture.App(), opgen.Options{})
-	for _, f := range []string{"openapi.json", "mcp.json", "cli.json", "go/vault/vault.go", "rust/vault/src/lib.rs", "cpp/include/vault/vault.hpp"} {
+	for _, f := range []string{"openapi.json", "mcp.json", "commands.json", "go/vault/vault.go", "rust/vault/src/lib.rs", "cpp/include/vault/vault.hpp"} {
 		if !bytes.Equal(read(t, filepath.Join(one, f)), read(t, filepath.Join(two, f))) {
 			t.Errorf("%s is not reproducible", f)
 		}
@@ -125,7 +125,7 @@ func TestAnUndeclaredOpIsInNoProjection(t *testing.T) {
 	}
 
 	_, dir := emit(t, app, opgen.Options{})
-	for _, f := range []string{"openapi.json", "mcp.json", "cli.json", "rust/vault/src/lib.rs", "cpp/include/vault/vault.hpp"} {
+	for _, f := range []string{"openapi.json", "mcp.json", "commands.json", "rust/vault/src/lib.rs", "cpp/include/vault/vault.hpp"} {
 		if body := read(t, filepath.Join(dir, f)); bytes.Contains(body, []byte("vault_retired")) || bytes.Contains(body, []byte("/v1/retired")) {
 			t.Errorf("%s publishes an undeclared address", f)
 		}

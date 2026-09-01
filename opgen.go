@@ -59,16 +59,16 @@ import (
 // The projections this adds to zip's own vocabulary. The verb is the value, so
 // what a person types and what the code names are the same token.
 const (
-	MCP  zip.Projection = "mcp"
-	CLI  zip.Projection = "cli"
-	Go   zip.Projection = "go"
-	Rust zip.Projection = "rust"
-	Cpp  zip.Projection = "cpp"
+	MCP      zip.Projection = "mcp"
+	Commands zip.Projection = "commands"
+	Go       zip.Projection = "go"
+	Rust     zip.Projection = "rust"
+	Cpp      zip.Projection = "cpp"
 )
 
 // All is every projection, in the order they are written: the document first,
 // because everything after it is derived from the document.
-var All = []zip.Projection{zip.OpenAPI, MCP, CLI, Go, Rust, Cpp}
+var All = []zip.Projection{zip.OpenAPI, MCP, Commands, Go, Rust, Cpp}
 
 // Options says where to write and what to call it.
 type Options struct {
@@ -231,7 +231,7 @@ func render(doc []byte, name string, want map[zip.Projection]bool) (*drawn, erro
 	}
 	sortGaps(out.gaps)
 
-	if want[CLI] {
+	if want[Commands] {
 		cmds, err := zip.CommandsFromSpec(doc)
 		if err != nil {
 			return nil, fmt.Errorf("opgen: the command tree: %w", err)
@@ -240,7 +240,7 @@ func render(doc []byte, name string, want map[zip.Projection]bool) (*drawn, erro
 		if err != nil {
 			return nil, fmt.Errorf("opgen: rendering the command tree: %w", err)
 		}
-		out.files["cli.json"] = append(b, '\n')
+		out.files["commands.json"] = append(b, '\n')
 	}
 	if want[Rust] {
 		for path, body := range rust(s, name) {
