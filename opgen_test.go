@@ -1,0 +1,423 @@
+package opgen_test
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/luxfi/opgen"
+	"github.com/luxfi/opgen/internal/fixture"
+	"github.com/zap-proto/zip"
+)
+
+func emit(t *testing.T, app *zip.App, o opgen.Options) (*opgen.Result, string) {
+	t.Helper()
+	if o.Dir == "" {
+		o.Dir = t.TempDir()
+	}
+	r, err := opgen.Emit(app, o)
+	if err != nil {
+		t.Fatalf("Emit: %v", err)
+	}
+	return r, o.Dir
+}
+
+func read(t *testing.T, path string) []byte {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	return b
+}
+
+// One run writes the whole surface. A generator that emitted some of it would
+// leave the rest to a second pipeline, which is the drift this exists to stop.
+func TestEveryProjectionIsWritten(t *testing.T) {
+	r, dir := emit(t, fixture.App(), opgen.Options{})
+	want := []string{
+		"cli.json",
+		"cpp/CMakeLists.txt",
+		"cpp/include/vault/vault.hpp",
+		"go/vault/vault.go",
+		"mcp.json",
+		"openapi.json",
+		"rust/vault/Cargo.toml",
+		"rust/vault/src/lib.rs",
+	}
+	if strings.Join(r.Files, ",") != strings.Join(want, ",") {
+		t.Fatalf("wrote %v, want %v", r.Files, want)
+	}
+	for _, f := range want {
+		if len(read(t, filepath.Join(dir, f))) == 0 {
+			t.Errorf("%s is empty", f)
+		}
+	}
+	if r.Ops != 4 {
+		t.Errorf("Ops = %d, want the fixture's 4", r.Ops)
+	}
+}
+
+// The document is the intermediate form, and everything derived from it reads
+// its BYTES. So generating from a live app and generating from the document
+// that app wrote are not two implementations to keep level — they are one, and
+// this says so in the only way that stays true: by comparing the output.
+func TestTheDocumentIsTheOnlyIntermediateForm(t *testing.T) {
+	_, live := emit(t, fixture.App(), opgen.Options{})
+
+	fromDoc := t.TempDir()
+	if _, err := opgen.EmitSpec(read(t, filepath.Join(live, "openapi.json")), opgen.Options{Dir: fromDoc, Name: "vault"}); err != nil {
+		t.Fatalf("EmitSpec: %v", err)
+	}
+	for _, f := range []string{"cli.json", "cpp/include/vault/vault.hpp", "cpp/CMakeLists.txt", "rust/vault/src/lib.rs", "rust/vault/Cargo.toml"} {
+		if !bytes.Equal(read(t, filepath.Join(live, f)), read(t, filepath.Join(fromDoc, f))) {
+			t.Errorf("%s differs between the app and its own document", f)
+		}
+	}
+}
+
+// Running twice writes the same bytes. A generator whose output moved would
+// show a diff on every CI run and teach everyone to ignore the diff.
+func TestTheSameAppWritesTheSameBytes(t *testing.T) {
+	_, one := emit(t, fixture.App(), opgen.Options{})
+	_, two := emit(t, fixture.App(), opgen.Options{})
+	for _, f := range []string{"openapi.json", "mcp.json", "cli.json", "go/vault/vault.go", "rust/vault/src/lib.rs", "cpp/include/vault/vault.hpp"} {
+		if !bytes.Equal(read(t, filepath.Join(one, f)), read(t, filepath.Join(two, f))) {
+			t.Errorf("%s is not reproducible", f)
+		}
+	}
+}
+
+type hidden struct {
+	A string `json:"a"`
+}
+
+func gone(_ context.Context, in *hidden) (*hidden, error) { return in, nil }
+
+// A route registered through zip.Undeclared serves without being part of the
+// contract. zip's extraction calls do not honour that — measured: the op is in
+// OpenAPISpec, in MCPTools and in Commands, while the live MCP door filters it
+// out. Publishing from the raw calls puts a dead address in the docs site, in
+// three SDKs and in the agent's tool list.
+func TestAnUndeclaredOpIsInNoProjection(t *testing.T) {
+	app := fixture.App()
+	zip.Post(zip.Undeclared(app), "/v1/retired", gone,
+		zip.WithOperationID("vault_retired"),
+		zip.WithSummary("gone"))
+
+	// First, that the leak is real and this test is not vacuous.
+	if err := app.Build(); err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	raw := false
+	for _, tool := range app.MCPTools() {
+		if tool["name"] == "vault_retired" {
+			raw = true
+		}
+	}
+	if !raw {
+		t.Skip("zip no longer leaks undeclared ops into MCPTools; the filter is now redundant")
+	}
+
+	_, dir := emit(t, app, opgen.Options{})
+	for _, f := range []string{"openapi.json", "mcp.json", "cli.json", "rust/vault/src/lib.rs", "cpp/include/vault/vault.hpp"} {
+		if body := read(t, filepath.Join(dir, f)); bytes.Contains(body, []byte("vault_retired")) || bytes.Contains(body, []byte("/v1/retired")) {
+			t.Errorf("%s publishes an undeclared address", f)
+		}
+	}
+	// And the schema it was the only user of goes with it.
+	if bytes.Contains(read(t, filepath.Join(dir, "openapi.json")), []byte("\"hidden\"")) {
+		t.Error("openapi.json keeps a schema no published op reaches")
+	}
+}
+
+// The two wires do not carry the same set of operations, and the run says so
+// rather than letting a caller assume every client has every method. vault_seal
+// takes a map and an `any`, neither of which the ZAP wire can express, so the
+// Go SDK has three methods where the HTTP clients have four.
+func TestAWireThatCannotCarryAnOpSaysSo(t *testing.T) {
+	r, dir := emit(t, fixture.App(), opgen.Options{})
+	if len(r.Gaps) != 1 || r.Gaps[0].Op != "vault_seal" || r.Gaps[0].Where != opgen.Go {
+		t.Fatalf("Gaps = %+v, want the ZAP wire refusing vault_seal", r.Gaps)
+	}
+	if bytes.Contains(read(t, filepath.Join(dir, "go/vault/vault.go")), []byte("VaultSeal")) {
+		t.Error("the Go SDK has a method for an op its wire refuses")
+	}
+	for _, f := range []string{"rust/vault/src/lib.rs", "cpp/include/vault/vault.hpp"} {
+		if !bytes.Contains(read(t, filepath.Join(dir, f)), []byte("vault_seal")) {
+			t.Errorf("%s is missing an op the JSON edge carries fine", f)
+		}
+	}
+}
+
+// The type matrix, read back out of the document.
+func TestTheDocumentCarriesEveryKind(t *testing.T) {
+	_, dir := emit(t, fixture.App(), opgen.Options{})
+	s, err := opgen.Read(read(t, filepath.Join(dir, "openapi.json")))
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	var seal opgen.Type
+	for _, ty := range s.Types {
+		if ty.Name == "Seal" {
+			seal = ty
+		}
+	}
+	want := map[string]opgen.Kind{
+		"name":   {Sort: opgen.Text},
+		"bytes":  {Sort: opgen.Whole, Bits: 64, Signed: true},
+		"weight": {Sort: opgen.Real, Bits: 64},
+		"rotate": {Sort: opgen.Flag},
+		"blob":   {Sort: opgen.Octets},
+		"at":     {Sort: opgen.Moment},
+		"free":   {Sort: opgen.Free},
+		"nested": {Sort: opgen.Named, Ref: "Party"},
+		"owner":  {Sort: opgen.Named, Ref: "Party"},
+	}
+	got := map[string]opgen.Kind{}
+	for _, f := range seal.Fields {
+		got[f.Name] = f.Kind
+	}
+	for name, k := range want {
+		if got[name] != k {
+			t.Errorf("Seal.%s = %+v, want %+v", name, got[name], k)
+		}
+	}
+	if k := got["tags"]; k.Sort != opgen.List || k.Elem.Sort != opgen.Text {
+		t.Errorf("Seal.tags = %+v, want a list of text", k)
+	}
+	if k := got["counts"]; k.Sort != opgen.List || k.Elem.Sort != opgen.Whole || k.Elem.Bits != 32 {
+		t.Errorf("Seal.counts = %+v, want a list of 32-bit whole numbers", k)
+	}
+	if k := got["labels"]; k.Sort != opgen.Table || k.Elem.Sort != opgen.Text {
+		t.Errorf("Seal.labels = %+v, want a table of text", k)
+	}
+	// A field the Go type opts out of with json:"-" is on no wire at all.
+	if _, leaked := got["Skipped"]; leaked {
+		t.Error("a field marked json:\"-\" reached the document")
+	}
+	if len(seal.Fields) != len(want)+3 {
+		t.Errorf("Seal has %d fields, want %d", len(seal.Fields), len(want)+3)
+	}
+}
+
+// A bodyless op's input is one value on the Go side and a parameter list in the
+// document. Putting it back together is what keeps every generated method the
+// same shape.
+func TestABodylessOpGetsItsInputBack(t *testing.T) {
+	_, dir := emit(t, fixture.App(), opgen.Options{})
+	s, err := opgen.Read(read(t, filepath.Join(dir, "openapi.json")))
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	for _, o := range s.Ops {
+		if o.ID != "vault_read" {
+			continue
+		}
+		if o.In != "VaultRead" || o.Out != "Secret" {
+			t.Fatalf("vault_read is %q -> %q, want VaultRead -> Secret", o.In, o.Out)
+		}
+		if strings.Join(o.Segments, ",") != "name" {
+			t.Errorf("segments = %v, want the one path parameter", o.Segments)
+		}
+		if strings.Join(o.Query, ",") != "reveal" {
+			t.Errorf("query = %v, want the one query parameter", o.Query)
+		}
+		if o.Body {
+			t.Error("a GET was given a body")
+		}
+		return
+	}
+	t.Fatal("vault_read is not in the surface")
+}
+
+// Nothing is generated for a program that does not build. An app that fails to
+// build projects as an EMPTY one, so without this a release writes an empty
+// document and three empty SDKs for a broken service and exits 0.
+func TestABrokenAppIsNotDescribed(t *testing.T) {
+	app := zip.New(zip.Config{AppName: "broken", DisableStartupMessage: true})
+	zip.Get(app, "/v1/one", gone, zip.WithOperationID("same"))
+	zip.Get(app, "/v1/two", gone, zip.WithOperationID("same"))
+
+	dir := t.TempDir()
+	if _, err := opgen.Emit(app, opgen.Options{Dir: dir}); err == nil {
+		t.Fatal("Emit described an app that does not build")
+	}
+	if names, _ := os.ReadDir(dir); len(names) != 0 {
+		t.Errorf("wrote %d files for a broken app, want none", len(names))
+	}
+}
+
+// A document is enough for the client legs and is NOT enough for the Go SDK,
+// which speaks a wire the document does not describe. Asking for one from a
+// document is refused rather than quietly skipped.
+func TestTheGoSDKIsNotReachableFromADocument(t *testing.T) {
+	_, dir := emit(t, fixture.App(), opgen.Options{})
+	out := t.TempDir()
+	r, err := opgen.EmitSpec(read(t, filepath.Join(dir, "openapi.json")), opgen.Options{Dir: out, Name: "vault", Only: []zip.Projection{opgen.Go}})
+	if err != nil {
+		t.Fatalf("EmitSpec: %v", err)
+	}
+	if len(r.Files) != 0 {
+		t.Errorf("wrote %v from a document, want nothing", r.Files)
+	}
+}
+
+// The MCP manifest is the tool list an agent reads, so its names have to be the
+// operation ids every other projection uses.
+func TestTheToolListNamesTheOperations(t *testing.T) {
+	_, dir := emit(t, fixture.App(), opgen.Options{})
+	var tools []map[string]any
+	if err := json.Unmarshal(read(t, filepath.Join(dir, "mcp.json")), &tools); err != nil {
+		t.Fatalf("mcp.json: %v", err)
+	}
+	var names []string
+	for _, tool := range tools {
+		names = append(names, tool["name"].(string))
+		if _, ok := tool["inputSchema"]; !ok {
+			t.Errorf("%v has no inputSchema", tool["name"])
+		}
+	}
+	if strings.Join(names, ",") != "vault_health,vault_list,vault_read,vault_seal" {
+		t.Errorf("tools = %v, want the four ops in name order", names)
+	}
+}
+
+// ---- the generated code is compiled, not merely written ---------------------
+
+// Rust: the crate builds, warnings are errors, and one call over a transport
+// that answers from memory produces the address and body the service expects.
+func TestTheRustCrateCompilesAndCalls(t *testing.T) {
+	cargo := tool(t, "cargo")
+	_, dir := emit(t, fixture.App(), opgen.Options{})
+	crate := filepath.Join(dir, "rust", "vault")
+
+	if err := os.MkdirAll(filepath.Join(crate, "tests"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(crate, "tests", "calls.rs"), []byte(rustCheck), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run(t, crate, cargo, "test", "--offline")
+}
+
+// C++: the header compiles under -Wall -Wextra -Werror and the same call
+// produces the same address and body.
+func TestTheCppHeaderCompilesAndCalls(t *testing.T) {
+	cxx := tool(t, "g++")
+	_, dir := emit(t, fixture.App(), opgen.Options{})
+	if _, err := os.Stat("/usr/include/nlohmann/json.hpp"); err != nil {
+		t.Skip("nlohmann/json is not installed")
+	}
+	work := t.TempDir()
+	src := filepath.Join(work, "calls.cpp")
+	if err := os.WriteFile(src, []byte(cppCheck), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	bin := filepath.Join(work, "calls")
+	run(t, work, cxx, "-std=c++20", "-Wall", "-Wextra", "-Werror",
+		"-I", filepath.Join(dir, "cpp", "include"), src, "-o", bin)
+	run(t, work, bin)
+}
+
+// The Go SDK zip renders is compiled too, in a module of its own, because a
+// generated package that does not build is the one failure the whole pipeline
+// exists to prevent.
+func TestTheGoSDKCompiles(t *testing.T) {
+	if testing.Short() {
+		t.Skip("compiling the Go SDK needs the module cache")
+	}
+	_, dir := emit(t, fixture.App(), opgen.Options{})
+	pkg := filepath.Join(dir, "go", "vault")
+	mod := "module example.com/vaultsdk\n\ngo 1.26.5\n\nrequire github.com/zap-proto/zip " + zipVersion(t) + "\n"
+	if err := os.WriteFile(filepath.Join(pkg, "go.mod"), []byte(mod), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run(t, pkg, "go", "mod", "tidy")
+	run(t, pkg, "go", "build", "./...")
+}
+
+// zipVersion is the zip this test binary was built against, so the generated
+// SDK is compiled against the same one that rendered it.
+func zipVersion(t *testing.T) string {
+	t.Helper()
+	out, err := exec.Command("go", "list", "-m", "github.com/zap-proto/zip").Output()
+	if err != nil {
+		t.Skipf("cannot read the zip version: %v", err)
+	}
+	parts := strings.Fields(string(out))
+	if len(parts) < 2 {
+		t.Skipf("cannot read the zip version from %q", out)
+	}
+	return parts[1]
+}
+
+func tool(t *testing.T, name string) string {
+	t.Helper()
+	if testing.Short() {
+		t.Skipf("compiling %s output is not a short test", name)
+	}
+	path, err := exec.LookPath(name)
+	if err != nil {
+		for _, dir := range []string{os.Getenv("HOME") + "/.cargo/bin"} {
+			if p := filepath.Join(dir, name); fileExists(p) {
+				return p
+			}
+		}
+		t.Skipf("%s is not installed", name)
+	}
+	return path
+}
+
+func fileExists(p string) bool {
+	info, err := os.Stat(p)
+	return err == nil && !info.IsDir()
+}
+
+func run(t *testing.T, dir, name string, args ...string) {
+	t.Helper()
+	cmd := exec.Command(name, args...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "PATH="+os.Getenv("HOME")+"/.cargo/bin:"+os.Getenv("PATH"), "RUSTFLAGS=-D warnings")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("%s %s:\n%s", name, strings.Join(args, " "), out)
+	}
+	t.Logf("%s %s\n%s", filepath.Base(name), strings.Join(args, " "), out)
+}
+
+type sealed struct {
+	Key string `json:"key"`
+}
+
+func onlyBody(_ context.Context, in *sealed) (*sealed, error) { return in, nil }
+
+// A service whose every address is fixed needs no percent-encoder, and a crate
+// carrying one nothing calls does not compile under the dead-code lint. Found
+// by generating the real egress client, whose three ops all answer at fixed
+// addresses.
+func TestNothingUnusedIsGenerated(t *testing.T) {
+	app := zip.New(zip.Config{AppName: "fixed", DisableStartupMessage: true})
+	zip.Post(app, "/v1/seal", onlyBody, zip.WithOperationID("fixed_seal"))
+
+	_, dir := emit(t, app, opgen.Options{})
+	crate := read(t, filepath.Join(dir, "rust/fixed/src/lib.rs"))
+	if bytes.Contains(crate, []byte("fn encode(")) {
+		t.Error("the crate carries an encoder no address uses")
+	}
+
+	// And the fixture, whose addresses do carry values, still has one.
+	_, withValues := emit(t, fixture.App(), opgen.Options{})
+	if !bytes.Contains(read(t, filepath.Join(withValues, "rust/vault/src/lib.rs")), []byte("fn encode(")) {
+		t.Error("a service with values in its URLs lost its encoder")
+	}
+
+	// The compiler is the real check.
+	cargo := tool(t, "cargo")
+	run(t, filepath.Join(dir, "rust", "fixed"), cargo, "build", "--offline")
+}
