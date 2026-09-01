@@ -648,3 +648,67 @@ func TestAFailedRunLeavesNothingBehind(t *testing.T) {
 		t.Errorf("wrote %d files for a refused run, want none", len(names))
 	}
 }
+
+type coin struct {
+	Asset string `json:"asset"`
+	Party Party2 `json:"party"`
+}
+
+// Party2 shares its shape with the fixture's Party but is a different type, so
+// composing the two apps forces the document to tell them apart.
+type Party2 struct {
+	Org string `json:"org"`
+}
+
+func mint(_ context.Context, in *coin) (*coin, error) { return in, nil }
+
+// A service the size of a node is not one app. node runs nine, one per service,
+// and a client that had to be nine crates would be nine things to keep level.
+// zip composes them — the document is the union — and the whole surface then
+// comes off the host in one run.
+func TestComposedAppsMakeOneSurface(t *testing.T) {
+	host := fixture.App()
+	child := zip.New(zip.Config{AppName: "mint", DisableStartupMessage: true})
+	zip.Post(child, "/v1/mint", mint, zip.WithOperationID("mint_coin"), zip.WithSummary("Mint one coin"))
+	host.Use(child)
+
+	r, dir := emit(t, host, opgen.Options{Name: "node"})
+	if r.Ops != 5 {
+		t.Fatalf("Ops = %d, want the fixture's 4 plus the child's 1", r.Ops)
+	}
+	crate := string(read(t, filepath.Join(dir, "rust/node/src/lib.rs")))
+	for _, want := range []string{"pub fn vault_seal", "pub fn mint_coin"} {
+		if !strings.Contains(crate, want) {
+			t.Errorf("the crate is missing %s", want)
+		}
+	}
+	// A composed child's types are qualified by their origin, so two services
+	// that both declare a Party are two types and not a silent collision.
+	if !strings.Contains(crate, "pub struct MintParty2") {
+		t.Errorf("the child's type did not keep its origin:\n%s", names(crate))
+	}
+	if !strings.Contains(crate, "pub struct Party ") {
+		t.Error("the host's own type was renamed")
+	}
+
+	cargoBuild(t, filepath.Join(dir, "rust", "node"), "build")
+
+	compiler := cxx(t)
+	work := t.TempDir()
+	src := filepath.Join(work, "node.cpp")
+	if err := os.WriteFile(src, []byte("#include <node/node.hpp>\nint main() { return 0; }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run(t, work, compiler, "-std=c++20", "-Wall", "-Wextra", "-Werror",
+		"-I", filepath.Join(dir, "cpp", "include"), src, "-o", filepath.Join(work, "node"))
+}
+
+func names(src string) string {
+	var out []string
+	for _, line := range strings.Split(src, "\n") {
+		if strings.HasPrefix(line, "pub struct ") {
+			out = append(out, line)
+		}
+	}
+	return strings.Join(out, "\n")
+}

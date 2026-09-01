@@ -84,6 +84,18 @@ is two pipelines again, which is the thing being removed.
 
 Credit where it is due: it gets the recursive type right, the same way.
 
+## A service the size of a node is not one app
+
+node runs nine zip apps, one per service — platform, admin, info, xvm, xsvm,
+indexer, health, security, proposervm — 94 typed ops between them. A client that
+had to be nine crates would be nine things to keep level, which is the problem
+again in a new shape.
+
+zip already composes: `host.Use(child)` makes every projection the union, and a
+composed child's types are qualified by their origin, so two services that both
+declare a Party are two types rather than a silent collision. Compose them and
+run this once on the host.
+
 ## The docs leg
 
 There is no docs emitter here and there should not be one. `openapi.json` IS the
