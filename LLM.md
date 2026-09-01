@@ -54,6 +54,36 @@ it speaks a wire the document does not describe.
     rust/<name>/                 Rust crate, HTTP/JSON
     cpp/include/<name>/          C++ header, HTTP/JSON
 
+## Why the emitters are ours and not openapi-generator
+
+Measured, on a document zip wrote for a struct holding every Go integer width.
+openapi-generator 7.25.0, `-g rust`:
+
+    zip says        openapi-generator      opgen
+    int8            i32                    i8
+    int16           i32                    i16
+    int32           i32                    i32
+    int64           i64                    i64
+    uint8           i32                    u8
+    uint16          i32                    u16
+    uint32          i32                    u32
+    uint64          i32                    u64
+    float           f32                    f32
+
+Six of nine wrong, and two of them cannot hold what the service sends. Fed
+`{"h": 18446744073709551615}` — a `uint64` field — the generated `Option<i32>`
+refuses to deserialize: *invalid value: integer 18446744073709551615, expected
+i32*. Six of the eight integer formats zip emits are the Go spelling rather than
+OpenAPI's four standard ones, and a generic generator has no reason to know
+them.
+
+It also costs 16 files and 296 lines where this costs 2 and 110, drags in
+reqwest and a TLS stack, and needs a JVM in CI. And it cannot reach the ZAP
+wire at all, so the Go leg would still have to come from somewhere else — which
+is two pipelines again, which is the thing being removed.
+
+Credit where it is due: it gets the recursive type right, the same way.
+
 ## What the SDKs depend on
 
 Rust: serde and serde_json. C++: nlohmann/json, and C++20.
