@@ -1,3 +1,12 @@
+# Runs on lux-build, the org's self-hosted runner, which is what every other
+# luxfi repository targets.
+#
+# That fleet is not currently servicing this org: every `ci` run in luxfi/crypto,
+# luxfi/cli and luxfi/genesis since June sits queued until GitHub cancels it at
+# the 24-hour timeout, and the only green runs anywhere are GitHub's own
+# dependency-graph jobs. Until a runner picks these up, this file is a gate that
+# does not run — which is why `make check` is the gate that does, and why every
+# proof in the report was produced by running it rather than by a green tick.
 name: ci
 
 on:

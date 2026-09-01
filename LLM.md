@@ -206,7 +206,14 @@ module, so `go build ./...` compiles it.
 
     go run ./internal/fixture/cmd -out example
 
-## CI
+## CI, and a fleet that is dark
+
+`.github/workflows/ci.yml` targets `lux-build`, the self-hosted runner every
+other luxfi repository uses. That fleet is not servicing this org: every `ci`
+run in luxfi/crypto, luxfi/cli and luxfi/genesis since June sits queued until
+GitHub cancels it at the 24-hour timeout, and the only green runs anywhere in
+the org are GitHub's own dependency-graph jobs. So the workflow here is correct
+and does not run, and `make check` is the gate that does.
 
 Two gates. Generate, then refuse a diff:
 
